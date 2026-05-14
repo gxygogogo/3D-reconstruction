@@ -92,7 +92,7 @@
         </div>
         <div class="status-bar">
           <span id="renderStatus">未渲染</span>
-          <span>鼠标旋转视角，滚轮缩放，右键平移</span>
+          <span>鼠标旋转视角，滚轮缩放；旋转中心锁定在体积中心</span>
         </div>
       </section>
 
@@ -111,6 +111,11 @@
           <label class="control">
             <span>层间距 Z <output id="zScaleVal">3.0</output></span>
             <input id="zScale" type="range" min="0.5" max="12" value="3" step="0.5" />
+          </label>
+
+          <label class="control">
+            <span>Z 轴平滑 <output id="zSmoothVal">0</output></span>
+            <input id="zSmooth" type="range" min="0" max="4" value="0" step="1" />
           </label>
 
           <label class="control">
@@ -207,6 +212,7 @@
             <span>当前层 <output id="layerIndexVal">1</output></span>
             <input id="layerIndex" type="range" min="1" max="1" value="1" disabled />
           </label>
+
         </section>
 
         <section class="section active-volume-card">
@@ -226,6 +232,7 @@
               <select id="colorMode" disabled>
                 <option value="solid">单色强度</option>
                 <option value="source">原始灰度</option>
+                <option value="he">HE 原彩透明</option>
                 <option value="depth">深度伪彩</option>
                 <option value="signal">热度强度</option>
               </select>
@@ -244,6 +251,26 @@
           <label class="control">
             <span>最大强度阈值 <output id="maxThresholdVal">255</output></span>
             <input id="maxThreshold" type="range" min="0" max="255" value="255" disabled />
+          </label>
+
+          <label class="control">
+            <span>HE 背景透明阈值 <output id="heBackgroundVal">230</output></span>
+            <input id="heBackground" type="range" min="160" max="255" value="230" disabled />
+          </label>
+
+          <label class="control">
+            <span>HE 黑背景透明阈值 <output id="heDarkBackgroundVal">45</output></span>
+            <input id="heDarkBackground" type="range" min="0" max="120" value="45" disabled />
+          </label>
+
+          <label class="text-field">
+            <span>指定透明切片</span>
+            <input id="opacitySliceSpec" type="text" placeholder="例如 3,8,20-25" disabled />
+          </label>
+
+          <label class="control">
+            <span>指定切片不透明度 <output id="sliceOpacityVal">0.35</output></span>
+            <input id="sliceOpacity" type="range" min="0" max="1" value="0.35" step="0.05" disabled />
           </label>
 
           <label class="check-row">
@@ -267,9 +294,22 @@
                 <option value="light">浅色</option>
               </select>
             </label>
+            <label>
+              <span>渲染视角</span>
+              <select id="renderAxis">
+                <option value="free">当前自由视角</option>
+                <option value="z-positive">沿 +Z 轴</option>
+                <option value="z-negative">沿 -Z 轴</option>
+                <option value="x-positive">沿 +X 轴</option>
+                <option value="x-negative">沿 -X 轴</option>
+                <option value="y-positive">沿 +Y 轴</option>
+                <option value="y-negative">沿 -Y 轴</option>
+              </select>
+            </label>
           </div>
+          <button id="applyRenderAxisBtn" class="full-width-btn">应用视角</button>
           <label class="check-row">
-            <input id="autoRotate" type="checkbox" checked />
+            <input id="autoRotate" type="checkbox" />
             <span>自动慢速旋转</span>
           </label>
         </section>

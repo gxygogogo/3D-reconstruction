@@ -18,6 +18,7 @@ const els = {
   sliceLabel: document.querySelector("#sliceLabel"),
   sampleStep: document.querySelector("#sampleStep"),
   zScale: document.querySelector("#zScale"),
+  zSmooth: document.querySelector("#zSmooth"),
   opacity: document.querySelector("#opacity"),
   pointSize: document.querySelector("#pointSize"),
   showBounds: document.querySelector("#showBounds"),
@@ -38,10 +39,16 @@ const els = {
   volumeColor: document.querySelector("#volumeColor"),
   minThreshold: document.querySelector("#minThreshold"),
   maxThreshold: document.querySelector("#maxThreshold"),
+  heBackground: document.querySelector("#heBackground"),
+  heDarkBackground: document.querySelector("#heDarkBackground"),
+  opacitySliceSpec: document.querySelector("#opacitySliceSpec"),
+  sliceOpacity: document.querySelector("#sliceOpacity"),
   volumeVisible: document.querySelector("#volumeVisible"),
   invertSignal: document.querySelector("#invertSignal"),
   activeVolumeState: document.querySelector("#activeVolumeState"),
   backgroundMode: document.querySelector("#backgroundMode"),
+  renderAxis: document.querySelector("#renderAxis"),
+  applyRenderAxisBtn: document.querySelector("#applyRenderAxisBtn"),
   autoRotate: document.querySelector("#autoRotate"),
   rebuildBtn: document.querySelector("#rebuildBtn"),
   clearBtn: document.querySelector("#clearBtn"),
@@ -70,6 +77,13 @@ scene.background = new THREE.Color("#070a10");
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
 camera.position.set(0, -420, 260);
 
+const axesScene = new THREE.Scene();
+const axesCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+axesCamera.position.set(0, 0, 180);
+axesCamera.lookAt(0, 0, 0);
+const axesHelper = new THREE.AxesHelper(70);
+axesScene.add(axesHelper);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 els.viewer.appendChild(renderer.domElement);
@@ -77,7 +91,13 @@ els.viewer.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-scene.add(new THREE.AxesHelper(130));
+controls.enablePan = false;
+controls.addEventListener("start", () => {
+  if (!state.isRecording) {
+    els.autoRotate.checked = false;
+    els.renderAxis.value = "free";
+  }
+});
 
 function activeVolume() {
   return state.volumes.find((volume) => volume.id === state.activeVolumeId) || null;
@@ -87,6 +107,7 @@ function getGlobalSettings() {
   return {
     sampleStep: Number(els.sampleStep.value),
     zScale: Number(els.zScale.value),
+    zSmooth: Number(els.zSmooth.value),
     opacity: Number(els.opacity.value),
     pointSize: Number(els.pointSize.value),
     showBounds: els.showBounds.checked,
@@ -126,11 +147,38 @@ function setStatus(text) {
   els.renderStatus.textContent = text;
 }
 
+function volumeCenter() {
+  return new THREE.Vector3(0, 0, 0);
+}
+
+function lockOrbitCenter() {
+  controls.target.copy(volumeCenter());
+}
+
 function resizeRenderer() {
   const rect = els.viewer.getBoundingClientRect();
   renderer.setSize(rect.width, rect.height);
   camera.aspect = rect.width / Math.max(rect.height, 1);
   camera.updateProjectionMatrix();
+}
+
+function renderScene() {
+  lockOrbitCenter();
+  const rect = els.viewer.getBoundingClientRect();
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, rect.width, rect.height);
+  renderer.render(scene, camera);
+
+  const axesSize = Math.min(118, rect.width * 0.18, rect.height * 0.18);
+  const margin = 18;
+  axesHelper.quaternion.copy(camera.quaternion).invert();
+  renderer.clearDepth();
+  renderer.setScissorTest(true);
+  renderer.setScissor(margin, margin, axesSize, axesSize);
+  renderer.setViewport(margin, margin, axesSize, axesSize);
+  renderer.render(axesScene, axesCamera);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, rect.width, rect.height);
 }
 
 function getIntensity(r, g, b, invert) {
@@ -153,7 +201,9 @@ function signalColor(t, target) {
 
 function mappedColor(volume, r, g, b, intensity, depthT, target) {
   const t = normalizeIntensity(intensity, volume.minThreshold, volume.maxThreshold);
-  if (volume.colorMode === "source") {
+  if (volume.colorMode === "he") {
+    target.setRGB(r / 255, g / 255, b / 255);
+  } else if (volume.colorMode === "source") {
     target.setScalar(t);
   } else if (volume.colorMode === "depth") {
     depthColor(depthT, target);
@@ -165,6 +215,53 @@ function mappedColor(volume, r, g, b, intensity, depthT, target) {
     target.multiplyScalar(0.25 + t * 0.85);
   }
   return target;
+}
+
+function isHeBackground(r, g, b, volume) {
+  const brightness = (r + g + b) / 3;
+  const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+  const nearWhite = brightness >= volume.heBackground && chroma < 34;
+  const nearBlack = brightness <= volume.heDarkBackground && chroma < 40;
+  return nearWhite || nearBlack;
+}
+
+function voxelIsVisible(volume, r, g, b, intensity) {
+  if (volume.colorMode === "he") {
+    return !isHeBackground(r, g, b, volume);
+  }
+  return intensity >= volume.minThreshold && intensity <= volume.maxThreshold;
+}
+
+function sampleVoxel(volume, x, y, z, radius) {
+  if (!radius) {
+    const slice = volume.slices[z];
+    const i = (y * slice.width + x) * 4;
+    return {
+      r: slice.rgba[i],
+      g: slice.rgba[i + 1],
+      b: slice.rgba[i + 2],
+    };
+  }
+
+  const from = Math.max(0, z - radius);
+  const to = Math.min(volume.slices.length - 1, z + radius);
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  for (let layer = from; layer <= to; layer += 1) {
+    const slice = volume.slices[layer];
+    const i = (y * slice.width + x) * 4;
+    r += slice.rgba[i];
+    g += slice.rgba[i + 1];
+    b += slice.rgba[i + 2];
+    count += 1;
+  }
+  return {
+    r: Math.round(r / count),
+    g: Math.round(g / count),
+    b: Math.round(b / count),
+  };
 }
 
 function createBoundingBox(volume, settings) {
@@ -195,6 +292,38 @@ function layerIsVisible(z, settings) {
   if (!settings.layerBrowseEnabled) return true;
   if (settings.layerBrowseMode === "accumulate") return z <= settings.layerIndex;
   return z === settings.layerIndex;
+}
+
+function layerOpacity(z, settings) {
+  return settings.opacity;
+}
+
+function sliceOpacityForVolume(volume, z, settings) {
+  return volume.opacitySlices.has(z) ? settings.opacity * volume.sliceOpacity : settings.opacity;
+}
+
+function parseSliceSpec(spec, maxSlices) {
+  const slices = new Set();
+  for (const rawPart of spec.split(/[,\s;，；]+/)) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const range = part.match(/^(\d+)\s*[-~:]\s*(\d+)$/);
+    if (range) {
+      const start = clamp(Number(range[1]), 1, maxSlices);
+      const end = clamp(Number(range[2]), 1, maxSlices);
+      const from = Math.min(start, end);
+      const to = Math.max(start, end);
+      for (let layer = from; layer <= to; layer += 1) {
+        slices.add(layer - 1);
+      }
+      continue;
+    }
+    const single = Number(part);
+    if (Number.isFinite(single) && single >= 1 && single <= maxSlices) {
+      slices.add(single - 1);
+    }
+  }
+  return slices;
 }
 
 function drawSlice(index = Number(els.sliceSlider.value)) {
@@ -246,7 +375,19 @@ function syncActiveControls() {
   const disabled = !volume;
   els.activeVolumeState.textContent = volume ? `${volume.slices.length} 层` : "未选择";
 
-  for (const input of [els.volumeName, els.colorMode, els.volumeColor, els.minThreshold, els.maxThreshold, els.volumeVisible, els.invertSignal]) {
+  for (const input of [
+    els.volumeName,
+    els.colorMode,
+    els.volumeColor,
+    els.minThreshold,
+    els.maxThreshold,
+    els.heBackground,
+    els.heDarkBackground,
+    els.opacitySliceSpec,
+    els.sliceOpacity,
+    els.volumeVisible,
+    els.invertSignal,
+  ]) {
     input.disabled = disabled;
   }
 
@@ -260,6 +401,10 @@ function syncActiveControls() {
   els.volumeColor.value = volume.color;
   els.minThreshold.value = String(volume.minThreshold);
   els.maxThreshold.value = String(volume.maxThreshold);
+  els.heBackground.value = String(volume.heBackground);
+  els.heDarkBackground.value = String(volume.heDarkBackground);
+  els.opacitySliceSpec.value = volume.opacitySliceSpec;
+  els.sliceOpacity.value = String(volume.sliceOpacity);
   els.volumeVisible.checked = volume.visible;
   els.invertSignal.checked = volume.invertSignal;
   updateOutputs();
@@ -275,7 +420,7 @@ function renderVolumeList() {
           <span class="swatch" style="background:${volume.color}"></span>
           <span class="volume-text">
             <strong>${escapeHtml(volume.name)}</strong>
-            <small>${volume.slices.length} 层 · ${volume.width}×${volume.height} · ${volume.minThreshold}-${volume.maxThreshold}</small>
+            <small>${volume.slices.length} 层 · ${volume.width}×${volume.height} · ${volume.colorMode === "he" ? `HE 亮>${volume.heBackground} 暗<${volume.heDarkBackground}` : `${volume.minThreshold}-${volume.maxThreshold}`}</small>
           </span>
         </button>
       `;
@@ -375,6 +520,11 @@ function makeVolume(file, decodedSlices) {
     colorMode: "solid",
     minThreshold: 45,
     maxThreshold: 255,
+    heBackground: 230,
+    heDarkBackground: 45,
+    opacitySliceSpec: "",
+    opacitySlices: new Set(),
+    sliceOpacity: 0.35,
     visible: true,
     invertSignal: false,
     width: decodedSlices[0].width,
@@ -409,7 +559,7 @@ async function loadFiles(fileList) {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   }
 
-  rebuildVolume();
+  rebuildVolume({ fitView: true, preserveObjectRotation: false });
 }
 
 function createPointCloud(settings) {
@@ -434,26 +584,24 @@ function createPointCloud(settings) {
 
       for (let y = 0; y < slice.height; y += settings.sampleStep) {
         for (let x = 0; x < slice.width; x += settings.sampleStep) {
-          const i = (y * slice.width + x) * 4;
-          const r = slice.rgba[i];
-          const g = slice.rgba[i + 1];
-          const b = slice.rgba[i + 2];
+          const { r, g, b } = sampleVoxel(volume, x, y, z, settings.zSmooth);
           const intensity = getIntensity(r, g, b, volume.invertSignal);
-          if (intensity < volume.minThreshold || intensity > volume.maxThreshold) continue;
+          if (!voxelIsVisible(volume, r, g, b, intensity)) continue;
 
           const px = x - xOffset;
           const py = yOffset - y;
           const pz = z * settings.zScale - zOffset;
           positions.push(px, py, pz);
           mappedColor(volume, r, g, b, intensity, depthT, tmpColor);
-          colors.push(tmpColor.r, tmpColor.g, tmpColor.b);
+          const opacityScale = sliceOpacityForVolume(volume, z, settings) / Math.max(settings.opacity, 0.001);
+          colors.push(tmpColor.r * opacityScale, tmpColor.g * opacityScale, tmpColor.b * opacityScale);
           points.push({
             x: px,
             y: py,
             z: pz,
-            r: Math.round(tmpColor.r * 255),
-            g: Math.round(tmpColor.g * 255),
-            b: Math.round(tmpColor.b * 255),
+            r: Math.round(tmpColor.r * opacityScale * 255),
+            g: Math.round(tmpColor.g * opacityScale * 255),
+            b: Math.round(tmpColor.b * opacityScale * 255),
             volume: volume.name,
           });
         }
@@ -508,13 +656,17 @@ function createSliceStack(settings) {
       const depthT = volume.slices.length > 1 ? z / (volume.slices.length - 1) : 0;
 
       for (let i = 0; i < slice.rgba.length; i += 4) {
-        const intensity = getIntensity(slice.rgba[i], slice.rgba[i + 1], slice.rgba[i + 2], volume.invertSignal);
-        const inRange = intensity >= volume.minThreshold && intensity <= volume.maxThreshold;
-        mappedColor(volume, slice.rgba[i], slice.rgba[i + 1], slice.rgba[i + 2], intensity, depthT, tmpColor);
+        const pixel = i / 4;
+        const x = pixel % slice.width;
+        const y = Math.floor(pixel / slice.width);
+        const { r, g, b } = sampleVoxel(volume, x, y, z, settings.zSmooth);
+        const intensity = getIntensity(r, g, b, volume.invertSignal);
+        const inRange = voxelIsVisible(volume, r, g, b, intensity);
+        mappedColor(volume, r, g, b, intensity, depthT, tmpColor);
         adjusted[i] = Math.round(tmpColor.r * 255);
         adjusted[i + 1] = Math.round(tmpColor.g * 255);
         adjusted[i + 2] = Math.round(tmpColor.b * 255);
-        adjusted[i + 3] = inRange ? Math.round(settings.opacity * 255) : 0;
+        adjusted[i + 3] = inRange ? Math.round(sliceOpacityForVolume(volume, z, settings) * 255) : 0;
       }
 
       ctx.putImageData(new ImageData(adjusted, slice.width, slice.height), 0, 0);
@@ -523,7 +675,7 @@ function createSliceStack(settings) {
       const material = new THREE.MeshBasicMaterial({
         map: texture,
         transparent: true,
-        opacity: settings.opacity,
+        opacity: 1,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
@@ -555,7 +707,8 @@ function disposeObject(object) {
   scene.remove(object);
 }
 
-function rebuildVolume() {
+function rebuildVolume({ fitView = false, preserveObjectRotation = true } = {}) {
+  const previousRotation = state.object?.rotation.clone();
   disposeObject(state.object);
   state.object = null;
   state.pointCloudData = [];
@@ -567,18 +720,23 @@ function rebuildVolume() {
 
   const settings = getGlobalSettings();
   state.object = state.renderMode === "points" ? createPointCloud(settings) : createSliceStack(settings);
+  if (preserveObjectRotation && previousRotation) {
+    state.object.rotation.copy(previousRotation);
+  }
   scene.add(state.object);
   els.emptyState.style.display = "none";
   setStatus(`已重建 ${state.volumes.filter((volume) => volume.visible).length} 个结构`);
   updateMeta();
-  fitCamera();
+  if (fitView) {
+    fitCamera();
+  }
 }
 
 function scheduleRebuild() {
   updateOutputs();
   updateLayerBrowseState();
   window.clearTimeout(state.rebuildTimer);
-  state.rebuildTimer = window.setTimeout(rebuildVolume, 150);
+  state.rebuildTimer = window.setTimeout(() => rebuildVolume(), 150);
 }
 
 function updateLayerBrowseState() {
@@ -596,18 +754,62 @@ function updateLayerBrowseState() {
     : "关闭";
 }
 
-function fitCamera() {
+function getVisibleBounds() {
   const visible = state.volumes.filter((volume) => volume.visible);
   const largest = visible[0] || state.volumes[0];
-  if (!largest) return;
+  if (!largest) return null;
 
   const maxDepth = Math.max(...visible.map((volume) => volume.slices.length * Number(els.zScale.value)), 80);
   const maxWidth = Math.max(...visible.map((volume) => volume.width), largest.width);
   const maxHeight = Math.max(...visible.map((volume) => volume.height), largest.height);
-  const maxDim = Math.max(maxWidth, maxHeight, maxDepth);
+  return { maxDepth, maxWidth, maxHeight };
+}
+
+function getCameraDistance(bounds) {
+  const maxDim = Math.max(bounds.maxWidth, bounds.maxHeight, bounds.maxDepth);
+  return Math.max(maxDim * 1.35, 180);
+}
+
+function fitCamera() {
+  const bounds = getVisibleBounds();
+  if (!bounds) return;
+
+  els.renderAxis.value = "free";
+  const maxDim = Math.max(bounds.maxWidth, bounds.maxHeight, bounds.maxDepth);
   camera.position.set(0, -maxDim * 1.25, maxDim * 0.72);
-  controls.target.set(0, 0, 0);
+  camera.up.set(0, 0, 1);
+  lockOrbitCenter();
+  camera.lookAt(controls.target);
   controls.update();
+}
+
+function applyRenderAxisView() {
+  const axis = els.renderAxis.value;
+  if (axis === "free") return;
+
+  const bounds = getVisibleBounds();
+  if (!bounds) {
+    setStatus("请先导入图像，再应用轴向视角");
+    return;
+  }
+
+  const distance = getCameraDistance(bounds);
+  const views = {
+    "z-positive": { position: [0, 0, distance], up: [0, 1, 0], label: "沿 +Z 轴" },
+    "z-negative": { position: [0, 0, -distance], up: [0, 1, 0], label: "沿 -Z 轴" },
+    "x-positive": { position: [distance, 0, 0], up: [0, 0, 1], label: "沿 +X 轴" },
+    "x-negative": { position: [-distance, 0, 0], up: [0, 0, 1], label: "沿 -X 轴" },
+    "y-positive": { position: [0, distance, 0], up: [0, 0, 1], label: "沿 +Y 轴" },
+    "y-negative": { position: [0, -distance, 0], up: [0, 0, 1], label: "沿 -Y 轴" },
+  };
+  const view = views[axis];
+  camera.position.set(...view.position);
+  camera.up.set(...view.up);
+  lockOrbitCenter();
+  camera.lookAt(controls.target);
+  controls.update();
+  els.autoRotate.checked = false;
+  setStatus(`已应用${view.label}渲染视角`);
 }
 
 function clearVolume() {
@@ -708,7 +910,7 @@ async function exportVideo() {
   for (let frame = 0; frame < animation.frames; frame += 1) {
     setRotationValue(state.object, animation.axis, originalRotation + (Math.PI * 2 * animation.turns * frame) / animation.frames);
     controls.update();
-    renderer.render(scene, camera);
+    renderScene();
     await waitFrame();
   }
   recorder.stop();
@@ -760,7 +962,7 @@ async function exportGif() {
     for (let frame = 0; frame < animation.frames; frame += 1) {
       setRotationValue(state.object, animation.axis, originalRotation + (Math.PI * 2 * animation.turns * frame) / animation.frames);
       controls.update();
-      renderer.render(scene, camera);
+      renderScene();
       gif.addFrame(renderer.domElement, { copy: true, delay: Math.round(1000 / animation.fps) });
       if (frame % 8 === 0) {
         setStatus(`正在采集 GIF 帧：${frame + 1} / ${animation.frames}`);
@@ -797,6 +999,11 @@ function applyActiveVolumeChange() {
   volume.invertSignal = els.invertSignal.checked;
   volume.minThreshold = Number(els.minThreshold.value);
   volume.maxThreshold = Number(els.maxThreshold.value);
+  volume.heBackground = Number(els.heBackground.value);
+  volume.heDarkBackground = Number(els.heDarkBackground.value);
+  volume.opacitySliceSpec = els.opacitySliceSpec.value.trim();
+  volume.opacitySlices = parseSliceSpec(volume.opacitySliceSpec, volume.slices.length);
+  volume.sliceOpacity = Number(els.sliceOpacity.value);
   if (volume.minThreshold > volume.maxThreshold) {
     const changedMax = document.activeElement === els.maxThreshold;
     if (changedMax) {
@@ -818,7 +1025,7 @@ function animate() {
     state.object.rotation[els.rotationAxis.value] += 0.002 * Number(els.liveRotationSpeed.value);
   }
   controls.update();
-  renderer.render(scene, camera);
+  renderScene();
 }
 
 els.fileInput.addEventListener("change", (event) => loadFiles(event.target.files).catch((error) => {
@@ -861,6 +1068,8 @@ els.sliceSlider.addEventListener("input", () => drawSlice());
 els.rebuildBtn.addEventListener("click", rebuildVolume);
 els.clearBtn.addEventListener("click", clearVolume);
 els.fitBtn.addEventListener("click", fitCamera);
+els.applyRenderAxisBtn.addEventListener("click", applyRenderAxisView);
+els.renderAxis.addEventListener("change", applyRenderAxisView);
 els.exportPlyBtn.addEventListener("click", exportPly);
 els.exportVideoBtn.addEventListener("click", exportVideo);
 els.exportGifBtn.addEventListener("click", exportGif);
@@ -873,6 +1082,7 @@ els.backgroundMode.addEventListener("change", () => {
 for (const input of [
   els.sampleStep,
   els.zScale,
+  els.zSmooth,
   els.opacity,
   els.pointSize,
   els.showBounds,
@@ -886,7 +1096,19 @@ for (const input of [
   input.addEventListener("change", scheduleRebuild);
 }
 
-for (const input of [els.volumeName, els.colorMode, els.volumeColor, els.minThreshold, els.maxThreshold, els.volumeVisible, els.invertSignal]) {
+for (const input of [
+  els.volumeName,
+  els.colorMode,
+  els.volumeColor,
+  els.minThreshold,
+  els.maxThreshold,
+  els.heBackground,
+  els.heDarkBackground,
+  els.opacitySliceSpec,
+  els.sliceOpacity,
+  els.volumeVisible,
+  els.invertSignal,
+]) {
   input.addEventListener("input", applyActiveVolumeChange);
   input.addEventListener("change", applyActiveVolumeChange);
 }
@@ -899,6 +1121,9 @@ els.modeButtons.forEach((button) => {
     rebuildVolume();
   });
 });
+
+const viewerResizeObserver = new ResizeObserver(resizeRenderer);
+viewerResizeObserver.observe(els.viewer);
 
 window.addEventListener("resize", resizeRenderer);
 updateOutputs();

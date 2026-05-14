@@ -18,7 +18,9 @@
 
 body {
   margin: 0;
+  width: 100vw;
   min-height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at 8% 12%, rgba(54, 198, 162, 0.08), transparent 28rem),
     linear-gradient(140deg, #0d1117 0%, #111827 48%, #101418 100%);
@@ -53,11 +55,12 @@ button:hover {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(420px, 1fr) minmax(280px, 340px);
-  gap: 14px;
-  width: min(1800px, 100vw);
-  min-height: 100vh;
-  padding: 14px;
+  grid-template-columns: 360px minmax(0, 1fr) 340px;
+  gap: 10px;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 0;
+  padding: 10px;
 }
 
 .panel,
@@ -71,7 +74,8 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  overflow: hidden;
+  min-height: 0;
+  overflow: auto;
   border-radius: 12px;
   padding: 14px;
 }
@@ -79,6 +83,8 @@ button:hover {
 .viewer-panel {
   display: grid;
   grid-template-rows: auto 1fr auto;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border-radius: 12px;
 }
@@ -349,7 +355,7 @@ input[type="range"] {
 
 .viewer {
   position: relative;
-  min-height: 520px;
+  min-height: 0;
   background: #070a10;
 }
 
@@ -453,9 +459,20 @@ select:disabled {
   margin-top: 3px;
 }
 
+.full-width-btn {
+  width: 100%;
+  margin-top: 12px;
+}
+
 @media (max-width: 1180px) {
+  body {
+    overflow: auto;
+  }
+
   .app-shell {
     grid-template-columns: 320px 1fr;
+    height: auto;
+    min-height: 100vh;
   }
 
   .controls-panel {
