@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>连续切片三维重构工作台</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="./vendor/UTIF.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js",
+          "three/addons/": "./vendor/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="panel import-panel">
+        <header class="brand">
+          <div class="brand-mark">3D</div>
+          <div>
+            <h1>连续切片三维重构</h1>
+            <p>导入切片序列或多页 TIFF，在浏览器本地重建与调整。</p>
+          </div>
+        </header>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>数据导入</h2>
+            <button id="clearBtn" class="icon-btn" title="清空数据" aria-label="清空数据">×</button>
+          </div>
+          <label class="drop-zone" id="dropZone">
+            <input id="fileInput" type="file" multiple accept="image/*,.tif,.tiff" />
+            <span class="drop-icon">+</span>
+            <strong>选择一个或多个堆叠 TIFF</strong>
+            <small>每个多页 TIFF 会作为一个独立三维结构导入，可单独命名、调色和筛阈值。</small>
+          </label>
+          <div class="meta-grid">
+            <div>
+              <span>切片数</span>
+              <strong id="sliceCount">0</strong>
+            </div>
+            <div>
+              <span>尺寸</span>
+              <strong id="volumeSize">-</strong>
+            </div>
+            <div>
+              <span>采样点</span>
+              <strong id="pointCount">0</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="section slice-browser">
+          <div class="section-head">
+            <h2>切片检查</h2>
+            <span id="sliceLabel">未加载</span>
+          </div>
+          <canvas id="sliceCanvas" width="512" height="512"></canvas>
+          <input id="sliceSlider" type="range" min="0" max="0" value="0" disabled />
+        </section>
+
+        <section class="section file-list-wrap">
+          <div class="section-head">
+            <h2>结构列表</h2>
+            <span id="loadState">等待导入</span>
+          </div>
+          <div id="volumeList" class="volume-list"></div>
+        </section>
+      </aside>
+
+      <section class="viewer-panel">
+        <div class="viewer-toolbar">
+          <div class="segmented">
+            <button class="active" data-render-mode="points">点云</button>
+            <button data-render-mode="slices">切片堆叠</button>
+          </div>
+          <div class="toolbar-actions">
+            <button id="fitBtn">居中</button>
+            <button id="exportPlyBtn">导出 PLY</button>
+            <button id="exportVideoBtn">导出 MP4/WebM</button>
+            <button id="exportGifBtn">导出 GIF</button>
+          </div>
+        </div>
+        <div id="viewer" class="viewer">
+          <div class="empty-state" id="emptyState">
+            <h2>把连续切片拖进来，就可以开始重构</h2>
+            <p>建议导入已配准/对齐后的 ROI 堆叠 tif；多个 tif 会叠加成多个可单独调色的三维结构。</p>
+          </div>
+        </div>
+        <div class="status-bar">
+          <span id="renderStatus">未渲染</span>
+          <span>鼠标旋转视角，滚轮缩放，右键平移</span>
+        </div>
+      </section>
+
+      <aside class="panel controls-panel">
+        <section class="section">
+          <div class="section-head">
+            <h2>重构参数</h2>
+            <button id="rebuildBtn">重建</button>
+          </div>
+
+          <label class="control">
+            <span>采样步长 <output id="sampleStepVal">4</output></span>
+            <input id="sampleStep" type="range" min="1" max="12" value="4" />
+          </label>
+
+          <label class="control">
+            <span>层间距 Z <output id="zScaleVal">3.0</output></span>
+            <input id="zScale" type="range" min="0.5" max="12" value="3" step="0.5" />
+          </label>
+
+          <label class="control">
+            <span>不透明度 <output id="opacityVal">0.72</output></span>
+            <input id="opacity" type="range" min="0.08" max="1" value="0.72" step="0.02" />
+          </label>
+
+          <label class="control">
+            <span>点大小 <output id="pointSizeVal">1.8</output></span>
+            <input id="pointSize" type="range" min="0.4" max="6" value="1.8" step="0.2" />
+          </label>
+
+          <label class="check-row">
+            <input id="showBounds" type="checkbox" checked />
+            <span>显示三维边框</span>
+          </label>
+
+          <label class="control">
+            <span>边框宽度 <output id="borderWidthVal">1.5</output></span>
+            <input id="borderWidth" type="range" min="0.5" max="5" value="1.5" step="0.5" />
+          </label>
+
+          <label class="text-field">
+            <span>边框颜色</span>
+            <input id="borderColor" type="color" value="#111827" />
+          </label>
+        </section>
+
+        <section class="section">
+          <h2>动画设置</h2>
+          <div class="option-grid">
+            <label>
+              <span>旋转轴</span>
+              <select id="rotationAxis">
+                <option value="z">Z 轴</option>
+                <option value="x">X 轴</option>
+                <option value="y">Y 轴</option>
+              </select>
+            </label>
+            <label>
+              <span>帧率</span>
+              <select id="animationFps">
+                <option value="12">12 fps</option>
+                <option value="24">24 fps</option>
+                <option value="30" selected>30 fps</option>
+                <option value="60">60 fps</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="control">
+            <span>视频帧数 <output id="videoFramesVal">180</output></span>
+            <input id="videoFrames" type="range" min="30" max="360" value="180" step="10" />
+          </label>
+
+          <label class="control">
+            <span>GIF 帧数 <output id="gifFramesVal">72</output></span>
+            <input id="gifFrames" type="range" min="24" max="180" value="72" step="6" />
+          </label>
+
+          <label class="control">
+            <span>旋转圈数 <output id="animationTurnsVal">1</output></span>
+            <input id="animationTurns" type="range" min="0.25" max="3" value="1" step="0.25" />
+          </label>
+
+          <label class="control">
+            <span>实时旋转速度 <output id="liveRotationSpeedVal">1</output></span>
+            <input id="liveRotationSpeed" type="range" min="0.1" max="4" value="1" step="0.1" />
+          </label>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>逐层浏览</h2>
+            <span id="layerBrowseState">关闭</span>
+          </div>
+
+          <label class="check-row">
+            <input id="layerBrowseEnabled" type="checkbox" />
+            <span>启用三维逐层浏览</span>
+          </label>
+
+          <div class="option-grid">
+            <label>
+              <span>浏览模式</span>
+              <select id="layerBrowseMode" disabled>
+                <option value="single">仅当前层</option>
+                <option value="accumulate">累积到当前层</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="control">
+            <span>当前层 <output id="layerIndexVal">1</output></span>
+            <input id="layerIndex" type="range" min="1" max="1" value="1" disabled />
+          </label>
+        </section>
+
+        <section class="section active-volume-card">
+          <div class="section-head">
+            <h2>当前结构</h2>
+            <span id="activeVolumeState">未选择</span>
+          </div>
+
+          <label class="text-field">
+            <span>结构名称</span>
+            <input id="volumeName" type="text" placeholder="导入后可重命名" disabled />
+          </label>
+
+          <div class="option-grid">
+            <label>
+              <span>颜色映射</span>
+              <select id="colorMode" disabled>
+                <option value="solid">单色强度</option>
+                <option value="source">原始灰度</option>
+                <option value="depth">深度伪彩</option>
+                <option value="signal">热度强度</option>
+              </select>
+            </label>
+            <label>
+              <span>结构颜色</span>
+              <input id="volumeColor" type="color" value="#36c6a2" disabled />
+            </label>
+          </div>
+
+          <label class="control">
+            <span>最小强度阈值 <output id="minThresholdVal">45</output></span>
+            <input id="minThreshold" type="range" min="0" max="255" value="45" disabled />
+          </label>
+
+          <label class="control">
+            <span>最大强度阈值 <output id="maxThresholdVal">255</output></span>
+            <input id="maxThreshold" type="range" min="0" max="255" value="255" disabled />
+          </label>
+
+          <label class="check-row">
+            <input id="volumeVisible" type="checkbox" checked disabled />
+            <span>显示这个结构</span>
+          </label>
+
+          <label class="check-row">
+            <input id="invertSignal" type="checkbox" disabled />
+            <span>反相信号，用于 HE 明场组织区域</span>
+          </label>
+        </section>
+
+        <section class="section">
+          <h2>显示设置</h2>
+          <div class="option-grid">
+            <label>
+              <span>背景</span>
+              <select id="backgroundMode">
+                <option value="dark">深色</option>
+                <option value="light">浅色</option>
+              </select>
+            </label>
+          </div>
+          <label class="check-row">
+            <input id="autoRotate" type="checkbox" checked />
+            <span>自动慢速旋转</span>
+          </label>
+        </section>
+
+        <section class="section notes">
+          <h2>建议流程</h2>
+          <p>先用 VALIS 或现有 Python 脚本完成连续切片对齐，再导入对齐后的 ROI/tif 堆栈。本工具负责快速三维预览、筛阈值、调层距和导出点云。</p>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

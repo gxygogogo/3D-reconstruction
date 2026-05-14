@@ -1,0 +1,84 @@
+{
+  "name": "serial-section-3d-reconstruction",
+  "version": "1.0.0",
+  "description": "Desktop app for multi-stack TIFF 3D reconstruction and visualization.",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "prepare:vendor": "node scripts/prepare-vendor.js",
+    "start": "npm run prepare:vendor && electron .",
+    "dist:mac": "npm run prepare:vendor && electron-builder --mac dmg zip --arm64",
+    "dist:win": "npm run prepare:vendor && electron-builder --win nsis zip --x64",
+    "dist:all": "npm run prepare:vendor && electron-builder --mac dmg zip --arm64 --win nsis zip --x64"
+  },
+  "dependencies": {
+    "three": "^0.165.0",
+    "utif": "^3.1.0"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.lab.serial-section-3d-reconstruction",
+    "productName": "Serial Section 3D Reconstruction",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "index.html",
+      "style.css",
+      "app.js",
+      "tiff-worker.js",
+      "gif.js",
+      "gif.worker.js",
+      "vendor/**/*",
+      "electron/**/*",
+      "README.md",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
